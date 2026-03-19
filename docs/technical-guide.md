@@ -9,6 +9,7 @@ MeetingHelper 是一个本地命令行工具，用于完成会议音频的录制
 - 列出本机可用音频输入设备
 - 录制麦克风音频并保存为 WAV 文件
 - 使用 `faster-whisper` 对音频进行离线转写
+- 可选使用 `pyannote.audio` 做发言人区分
 - 使用 OpenAI 模型根据转写文本生成结构化会议纪要
 - 通过单条命令串联“录音 -> 转写 -> 总结”流程
 
@@ -25,13 +26,15 @@ MeetingHelper/
 │   └── summaries/               # 纪要输出目录
 ├── docs/
 │   ├── technical-guide.md       # 技术说明
-│   └── user-guide.md            # 使用文档
+│   ├── user-guide.md            # 使用文档
+│   └── whisper-speaker-diarization-plan.md
 ├── pyproject.toml               # 打包配置与依赖声明
 └── src/
     └── meeting_helper/
         ├── __init__.py
         ├── cli.py               # Typer CLI 入口
         ├── config.py            # 配置加载与持久化
+        ├── diarizer.py          # 发言人区分
         ├── models.py            # 数据模型
         ├── recorder.py          # 麦克风录音
         ├── summarizer.py        # GPT 纪要生成
@@ -55,6 +58,7 @@ MeetingHelper/
 - `scipy`：将采集数据写入 WAV
 - `numpy`：音频帧拼接
 - `faster-whisper`：本地语音转写
+- `pyannote.audio`：说话人区分
 - `openai`：调用 GPT 生成会议纪要
 - `python-dotenv`：加载项目根目录 `.env`
 
@@ -70,6 +74,8 @@ MeetingHelper/
   - 负责音频输入设备枚举与录音。
 - `transcriber.py`
   - 负责 Whisper 模型加载和音频转写。
+- `diarizer.py`
+  - 负责说话人区分与 speaker 标签回填。
 - `summarizer.py`
   - 负责构造系统提示词并调用 OpenAI 接口生成纪要。
 - `utils.py`
@@ -111,13 +117,15 @@ MeetingHelper/
 2. `transcriber.transcribe_audio()` 初始化 `WhisperModel`。
 3. 调用 `model.transcribe()` 并启用 `vad_filter=True`。
 4. 将返回片段转换为内部 `Segment` 数据结构。
-5. `utils.save_transcription()` 同时输出 JSON 和 TXT。
+5. 若开启 `--diarize`，调用 `diarizer.assign_speakers()` 对齐 speaker 标签。
+6. `utils.save_transcription()` 同时输出 JSON 和 TXT。
 
 当前转写实现的固定参数：
 
 - 推理设备：`cpu`
 - 量化类型：`int8`
 - VAD 静音阈值：`500ms`
+- speaker 对齐规则：按 segment 与 diarization turn 的最大重叠时长匹配
 
 转写输出文件：
 
@@ -128,6 +136,7 @@ MeetingHelper/
 
 - JSON 保存完整元数据和分段结果
 - TXT 保存带 `[MM:SS]` 时间戳的纯文本
+- 启用 diarization 时，JSON/TXT 都会包含发言人标签
 
 ### 5.3 纪要生成链路
 
@@ -184,6 +193,7 @@ MeetingHelper/
 - `openai_api_key`
 - `openai_base_url`
 - `whisper_model`
+- `huggingface_token`
 - `gpt_model`
 - `language`
 - `sample_rate`
@@ -196,6 +206,7 @@ MeetingHelper/
 
 - `OPENAI_API_KEY` -> `openai_api_key`
 - `OPENAI_BASE_URL` -> `openai_base_url`
+- `HUGGINGFACE_TOKEN` -> `huggingface_token`
 - `WHISPER_MODEL` -> `whisper_model`
 - `GPT_MODEL` -> `gpt_model`
 - `MEETING_LANGUAGE` -> `language`
@@ -219,9 +230,10 @@ MeetingHelper/
 - `Recording`
   - 描述录音文件与采样参数
 - `Segment`
-  - 描述单个转写片段
+  - 描述单个转写片段，支持可选 `speaker`
 - `Transcription`
   - 聚合音频文件、片段、语言、模型和时长
+  - 可标记是否开启发言人区分以及识别到的说话人数
   - 暴露 `full_text` 属性，用于拼接整段文本
 - `Summary`
   - 描述纪要内容与关联转写文件
@@ -266,6 +278,7 @@ MeetingHelper/
 
 - OpenAI API 异常的细分处理
 - Whisper 模型下载或加载失败的恢复逻辑
+- pyannote 模型权限、token 或 `ffmpeg` 缺失时的自动诊断
 - 不同平台音频设备兼容性诊断
 - 输出文件写入失败时的更明确提示
 
@@ -274,6 +287,8 @@ MeetingHelper/
 从当前代码看，项目已经能完成基础闭环，但仍存在一些明显边界：
 
 - 转写设备固定为 CPU，未暴露 GPU 配置项
+- 发言人区分依赖 `pyannote.audio`、`ffmpeg` 和 Hugging Face token
+- speaker 归属目前基于 segment 级重叠匹配，仍有边界误差
 - 长文本总结没有分段、截断或重试机制，超长会议可能直接受模型上下文限制
 - `process` 命令即使只想跑前两步，也要求先配置 `OPENAI_API_KEY`
 - `config --set` 以字符串方式写入，数值型配置缺少类型校验
@@ -296,3 +311,5 @@ MeetingHelper/
 ## 12. 结论
 
 MeetingHelper 当前是一个实现直接、职责清楚的 Python CLI 工具。它适合个人或小团队在本地快速完成“会议录音 -> 语音转写 -> 纪要生成”的闭环。代码量不大，理解成本低，适合作为轻量工具直接使用，也适合作为后续扩展的基础版本。
+
+补充说明：Whisper 发言人区分能力已完成实现，并已通过一次本地端到端验证。验证命令为 `meeting transcribe data/recordings/meeting_20260318_152652.wav --model base --language zh --diarize`，结果成功生成带 `speaker` 标签的 JSON 和 TXT 转写文件。

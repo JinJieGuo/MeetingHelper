@@ -13,7 +13,7 @@
 
 - `meeting devices`：查看可用音频输入设备
 - `meeting record`：录制麦克风音频并保存为 WAV
-- `meeting transcribe`：使用 `faster-whisper` 转写音频
+- `meeting transcribe`：使用 `faster-whisper` 转写音频，可选发言人区分
 - `meeting summarize`：使用 OpenAI 模型生成 Markdown 纪要
 - `meeting process`：执行“录音 -> 转写 -> 纪要”一站式流程
 - `meeting config`：查看或写入本地配置
@@ -27,6 +27,7 @@
 - scipy
 - numpy
 - faster-whisper
+- pyannote.audio
 - OpenAI Python SDK
 
 ## 安装
@@ -57,6 +58,7 @@ cp .env.example .env
 ```env
 OPENAI_API_KEY=sk-your-api-key-here
 # OPENAI_BASE_URL=https://api.openai.com/v1
+# HUGGINGFACE_TOKEN=hf_your_token_here
 # WHISPER_MODEL=medium
 # GPT_MODEL=gpt-4o-mini
 # MEETING_LANGUAGE=zh
@@ -66,6 +68,7 @@ OPENAI_API_KEY=sk-your-api-key-here
 
 - `OPENAI_API_KEY`：生成会议纪要时必需
 - `OPENAI_BASE_URL`：接入兼容 OpenAI 协议的服务时可配置
+- `HUGGINGFACE_TOKEN`：启用发言人区分时必需
 - `WHISPER_MODEL`：默认转写模型
 - `GPT_MODEL`：默认纪要模型
 - `MEETING_LANGUAGE`：纪要输出语言，默认 `zh`
@@ -100,6 +103,12 @@ meeting record --duration 30
 meeting transcribe data/recordings/meeting_xxx.wav --model medium --language zh
 ```
 
+如果希望区分发言人：
+
+```bash
+meeting transcribe data/recordings/meeting_xxx.wav --model medium --language zh --diarize
+```
+
 最后生成纪要：
 
 ```bash
@@ -121,6 +130,22 @@ data/
 
 - 技术说明：[docs/technical-guide.md](docs/technical-guide.md)
 - 使用文档：[docs/user-guide.md](docs/user-guide.md)
+- 发言人区分方案：[docs/whisper-speaker-diarization-plan.md](docs/whisper-speaker-diarization-plan.md)
+
+## 当前状态
+
+Whisper 发言人区分能力已经落地，当前支持：
+
+- `meeting transcribe --diarize`
+- `meeting process --diarize`
+- 转写 JSON/TXT 输出 `speaker`
+- 将发言人标签传递给后续纪要生成链路
+
+本地已完成一次端到端验证：
+
+- 测试输入：`data/recordings/meeting_20260318_152652.wav`
+- 执行命令：`meeting transcribe ... --model base --language zh --diarize`
+- 结果：成功生成带 `SPEAKER_00` 标签的 JSON 和 TXT 转写文件
 
 ## 当前限制
 
@@ -128,6 +153,7 @@ data/
 - 当前纪要生成默认绑定 OpenAI 兼容接口
 - 长文本总结尚未做分段摘要和结果合并
 - 转写默认使用 CPU，未暴露更多推理后端配置
+- 发言人区分依赖 `pyannote.audio`、`ffmpeg` 和 Hugging Face token
 
 ## 待办事项
 
@@ -145,6 +171,7 @@ MeetingHelper/
 └── src/meeting_helper/
     ├── cli.py
     ├── config.py
+    ├── diarizer.py
     ├── recorder.py
     ├── transcriber.py
     ├── summarizer.py
@@ -159,4 +186,3 @@ MeetingHelper/
 1. 为转写和纪要分别定义 provider 接口。
 2. 在配置层增加 `provider`、`model`、`base_url`、`api_key` 等统一字段。
 3. 先落地本地实现和一个远端实现，再逐步扩充不同厂商适配器。
-

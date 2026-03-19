@@ -57,6 +57,7 @@ cp .env.example .env
 ```env
 OPENAI_API_KEY=sk-your-api-key-here
 # OPENAI_BASE_URL=https://api.openai.com/v1
+# HUGGINGFACE_TOKEN=hf_your_token_here
 # WHISPER_MODEL=medium
 # GPT_MODEL=gpt-4o-mini
 # MEETING_LANGUAGE=zh
@@ -66,6 +67,7 @@ OPENAI_API_KEY=sk-your-api-key-here
 
 - `OPENAI_API_KEY`：生成会议纪要必填
 - `OPENAI_BASE_URL`：使用自定义兼容接口时可配置
+- `HUGGINGFACE_TOKEN`：启用发言人区分时必填
 - `WHISPER_MODEL`：默认 Whisper 模型
 - `GPT_MODEL`：默认总结模型
 - `MEETING_LANGUAGE`：纪要输出语言，默认 `zh`
@@ -177,6 +179,18 @@ meeting transcribe data/recordings/meeting_20260318_140000.wav --model small
 meeting transcribe data/recordings/meeting_20260318_140000.wav --language zh
 ```
 
+启用发言人区分：
+
+```bash
+meeting transcribe data/recordings/meeting_20260318_140000.wav --language zh --diarize
+```
+
+限定说话人数范围：
+
+```bash
+meeting transcribe data/recordings/meeting_20260318_140000.wav --diarize --min-speakers 2 --max-speakers 4
+```
+
 当前支持的模型：
 
 - `tiny`
@@ -189,6 +203,11 @@ meeting transcribe data/recordings/meeting_20260318_140000.wav --language zh
 
 - `data/transcriptions/<文件名>.json`
 - `data/transcriptions/<文件名>.txt`
+
+如果启用了 `--diarize`：
+
+- JSON 中的每个分段会额外包含 `speaker`
+- TXT 会输出 `[SPEAKER_00]` 这类发言人标签
 
 ### 6.4 生成会议纪要
 
@@ -248,10 +267,21 @@ meeting process \
   --language zh
 ```
 
+一站式处理时启用发言人区分：
+
+```bash
+meeting process \
+  --audio-file data/recordings/meeting_20260318_140000.wav \
+  --model medium \
+  --language zh \
+  --diarize
+```
+
 注意：
 
 - `meeting process` 会在开始时检查 `OPENAI_API_KEY`
 - 即使使用已有音频文件，只要要生成纪要，也必须先配置 OpenAI Key
+- 启用 `--diarize` 时，还必须配置 `HUGGINGFACE_TOKEN`
 
 ## 7. 推荐使用流程
 
@@ -293,6 +323,7 @@ meeting process \
 - 模型名称
 - 音频时长
 - 分段时间与文本
+- 发言人标签（启用 diarization 时）
 
 ### 8.3 TXT 转写文件
 
@@ -301,6 +332,13 @@ meeting process \
 ```text
 [00:00] 大家好，我们开始今天的项目周会。
 [00:08] 先同步一下当前版本的进度。
+```
+
+启用发言人区分时，格式会变为：
+
+```text
+[00:00] [SPEAKER_00] 大家好，我们开始今天的项目周会。
+[00:08] [SPEAKER_01] 先同步一下当前版本的进度。
 ```
 
 ### 8.4 Markdown 纪要文件
@@ -344,6 +382,7 @@ meeting devices
 - 音频时长
 - 模型大小
 - 机器 CPU 性能
+- 是否启用了 `--diarize`
 
 如果只追求速度，可尝试更小模型，例如：
 
@@ -351,7 +390,17 @@ meeting devices
 meeting transcribe your_audio.wav --model base
 ```
 
-### 9.4 生成纪要失败
+如果启用了 `--diarize`，整体耗时会明显增加，这是正常现象。
+
+### 9.4 提示“未配置 HUGGINGFACE_TOKEN”
+
+这通常意味着你开启了 `--diarize`，但还没有配置 Hugging Face token。请确认：
+
+- `.env` 中是否设置了 `HUGGINGFACE_TOKEN`
+- 是否已接受 `pyannote/speaker-diarization-community-1` 的使用条款
+- 本机是否已安装 `ffmpeg`
+
+### 9.5 生成纪要失败
 
 通常优先检查：
 
@@ -360,7 +409,7 @@ meeting transcribe your_audio.wav --model base
 - `OPENAI_BASE_URL` 是否填写正确
 - 转写文本是否为空
 
-### 9.5 长会议能不能直接总结
+### 9.6 长会议能不能直接总结
 
 当前版本没有对超长转写进行分段摘要或上下文裁剪。会议过长时，可能出现：
 
@@ -377,11 +426,36 @@ meeting transcribe your_audio.wav --model base
 ## 10. 注意事项
 
 - 首次使用 Whisper 模型时，可能触发模型下载
+- 首次启用发言人区分前，请确保已安装 `ffmpeg`
 - `record` 和 `process` 手动停止时使用 `Ctrl+C`
 - 当前录音输出格式固定为 WAV
 - 纪要生成结果依赖转写质量，音频越清晰，输出通常越稳定
 
-## 11. 快速命令清单
+## 11. 本地验证
+
+当前版本已经完成一次本地端到端验证，验证内容为：
+
+- 使用现有 WAV 文件执行 `meeting transcribe --diarize`
+- 成功生成带 `speaker` 字段的 JSON 转写结果
+- 成功生成带 `[SPEAKER_00]` 标签的 TXT 转写结果
+
+验证样例命令：
+
+```bash
+./.venv/bin/meeting transcribe \
+  data/recordings/meeting_20260318_152652.wav \
+  --model base \
+  --language zh \
+  --diarize
+```
+
+验证结果说明：
+
+- 本次样本音频识别出 1 个说话人
+- 输出文件中的 `speaker_count` 为 `1`
+- 终端预览、JSON、TXT 三处结果保持一致
+
+## 12. 快速命令清单
 
 ```bash
 # 安装
@@ -399,6 +473,9 @@ meeting record --duration 15
 # 转写音频
 meeting transcribe data/recordings/meeting_xxx.wav --model medium --language zh
 
+# 转写并区分发言人
+meeting transcribe data/recordings/meeting_xxx.wav --model medium --language zh --diarize
+
 # 生成纪要
 meeting summarize data/transcriptions/meeting_xxx.txt --gpt-model gpt-4o-mini --language zh
 
@@ -409,7 +486,7 @@ meeting process --duration 15 --device 1 --model medium --gpt-model gpt-4o-mini 
 meeting config --show
 ```
 
-## 12. 总结
+## 13. 总结
 
 如果你希望最省事地使用这个工具，优先采用下面的方式：
 

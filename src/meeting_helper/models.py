@@ -25,6 +25,7 @@ class Segment:
     start: float
     end: float
     text: str
+    speaker: str | None = None
 
 
 @dataclass
@@ -36,11 +37,17 @@ class Transcription:
     language: str
     model: str
     duration_seconds: float
+    diarized: bool = False
+    speaker_count: int | None = None
     created_at: datetime = field(default_factory=datetime.now)
 
     @property
     def full_text(self) -> str:
-        return "\n".join(seg.text for seg in self.segments)
+        lines = []
+        for seg in self.segments:
+            speaker_prefix = f"[{seg.speaker}] " if seg.speaker else ""
+            lines.append(f"{speaker_prefix}{seg.text}")
+        return "\n".join(lines)
 
 
 @dataclass

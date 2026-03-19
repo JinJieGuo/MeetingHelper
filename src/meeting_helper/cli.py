@@ -114,30 +114,51 @@ def transcribe(
     file: Path = typer.Argument(..., help="音频文件路径", exists=True),
     model: str = typer.Option(DEFAULT_WHISPER_MODEL, "--model", "-m", help=f"Whisper 模型 ({', '.join(WHISPER_MODELS)})"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="强制语言代码（如 zh, en），留空自动检测"),
+    diarize: bool = typer.Option(False, "--diarize", help="启用发言人区分（需要 Hugging Face token）"),
+    min_speakers: Optional[int] = typer.Option(None, "--min-speakers", help="最少说话人数"),
+    max_speakers: Optional[int] = typer.Option(None, "--max-speakers", help="最多说话人数"),
 ):
     """转写音频文件为文本"""
     if model not in WHISPER_MODELS:
         console.print(f"[red]无效模型: {model}，可选: {', '.join(WHISPER_MODELS)}[/red]")
         raise typer.Exit(1)
+    if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
+        console.print("[red]错误: --min-speakers 不能大于 --max-speakers[/red]")
+        raise typer.Exit(1)
 
     cfg = load_config()
 
-    console.print(f"[green]开始转写[/green] — 模型: {model}")
+    if diarize and not cfg.huggingface_token:
+        console.print("[red]错误: 未配置 HUGGINGFACE_TOKEN，无法启用发言人区分[/red]")
+        raise typer.Exit(1)
+
+    mode_desc = f"{model} + diarization" if diarize else model
+
+    console.print(f"[green]开始转写[/green] — 模型: {mode_desc}")
     console.print(f"  文件: {file}")
 
     with console.status("[bold green]加载模型并转写中..."):
         from .transcriber import transcribe_audio
 
-        result = transcribe_audio(
-            audio_path=file,
-            model_size=model,
-            language=language,
-        )
+        try:
+            result = transcribe_audio(
+                audio_path=file,
+                model_size=model,
+                language=language,
+                diarize=diarize,
+                hf_token=cfg.huggingface_token,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+            )
+        except Exception as exc:
+            console.print(f"[red]转写失败: {exc}[/red]")
+            raise typer.Exit(1)
 
     output_dir = Path(cfg.transcriptions_dir)
     json_path, txt_path = save_transcription(result, output_dir)
 
-    console.print(f"[green]转写完成[/green] — 语言: {result.language}, 片段数: {len(result.segments)}")
+    speaker_info = f", 说话人数: {result.speaker_count}" if result.diarized and result.speaker_count else ""
+    console.print(f"[green]转写完成[/green] — 语言: {result.language}, 片段数: {len(result.segments)}{speaker_info}")
     console.print(f"  JSON: {json_path}")
     console.print(f"  TXT:  {txt_path}")
 
@@ -146,7 +167,8 @@ def transcribe(
     if preview_count > 0:
         console.print("\n[dim]── 转写预览 ──[/dim]")
         for seg in result.segments[:preview_count]:
-            console.print(f"  {format_duration(seg.start)} {seg.text}")
+            speaker_label = f"[{seg.speaker}] " if seg.speaker else ""
+            console.print(f"  {format_duration(seg.start)} {speaker_label}{seg.text}")
         if len(result.segments) > preview_count:
             console.print(f"  [dim]... 共 {len(result.segments)} 段[/dim]")
 
@@ -209,12 +231,21 @@ def process(
     model: str = typer.Option(DEFAULT_WHISPER_MODEL, "--model", "-m", help="Whisper 模型"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="语言代码"),
     gpt_model: Optional[str] = typer.Option(None, "--gpt-model", help="GPT 模型名"),
+    diarize: bool = typer.Option(False, "--diarize", help="启用发言人区分（需要 Hugging Face token）"),
+    min_speakers: Optional[int] = typer.Option(None, "--min-speakers", help="最少说话人数"),
+    max_speakers: Optional[int] = typer.Option(None, "--max-speakers", help="最多说话人数"),
 ):
     """一站式处理：录音 → 转写 → 生成纪要"""
     cfg = load_config(gpt_model=gpt_model, language=language)
+    if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
+        console.print("[red]错误: --min-speakers 不能大于 --max-speakers[/red]")
+        raise typer.Exit(1)
 
     if not cfg.openai_api_key:
         console.print("[red]错误: 未配置 OPENAI_API_KEY（纪要生成需要）[/red]")
+        raise typer.Exit(1)
+    if diarize and not cfg.huggingface_token:
+        console.print("[red]错误: 未配置 HUGGINGFACE_TOKEN，无法启用发言人区分[/red]")
         raise typer.Exit(1)
 
     # ── Step 1: 录音（或使用已有文件）──
@@ -257,30 +288,42 @@ def process(
         signal.signal(signal.SIGINT, signal.default_int_handler)
 
     # ── Step 2: 转写 ──
-    console.print(f"\n[green]Step 2/3: 转写[/green] — 模型: {model}")
+    mode_desc = f"{model} + diarization" if diarize else model
+    console.print(f"\n[green]Step 2/3: 转写[/green] — 模型: {mode_desc}")
 
     with console.status("[bold green]加载模型并转写中..."):
         from .transcriber import transcribe_audio
 
-        transcription = transcribe_audio(
-            audio_path=wav_path,
-            model_size=model,
-            language=language,
-        )
+        try:
+            transcription = transcribe_audio(
+                audio_path=wav_path,
+                model_size=model,
+                language=language,
+                diarize=diarize,
+                hf_token=cfg.huggingface_token,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+            )
+        except Exception as exc:
+            console.print(f"[red]转写失败: {exc}[/red]")
+            raise typer.Exit(1)
 
     output_dir = Path(cfg.transcriptions_dir)
     json_path, txt_path = save_transcription(transcription, output_dir)
-    console.print(f"  转写完成 — {len(transcription.segments)} 段, 语言: {transcription.language}")
+    speaker_info = f", 说话人数: {transcription.speaker_count}" if transcription.diarized and transcription.speaker_count else ""
+    console.print(f"  转写完成 — {len(transcription.segments)} 段, 语言: {transcription.language}{speaker_info}")
     console.print(f"  JSON: {json_path}")
+    console.print(f"  TXT:  {txt_path}")
 
     # ── Step 3: 纪要 ──
     console.print(f"\n[green]Step 3/3: 生成纪要[/green] — 模型: {cfg.gpt_model}")
+    transcript_text = load_transcription_text(json_path)
 
     with console.status("[bold green]GPT 生成中..."):
         from .summarizer import generate_summary
 
         summary_content = generate_summary(
-            transcript_text=transcription.full_text,
+            transcript_text=transcript_text,
             api_key=cfg.openai_api_key,
             gpt_model=cfg.gpt_model,
             language=cfg.language,
@@ -327,7 +370,7 @@ def config_cmd(
     table.add_column("值", style="green")
     for key, value in asdict(cfg).items():
         display_val = str(value)
-        if key == "openai_api_key" and value:
+        if key in {"openai_api_key", "huggingface_token"} and value:
             display_val = value[:8] + "..." + value[-4:] if len(value) > 12 else "***"
         table.add_row(key, display_val)
     console.print(table)

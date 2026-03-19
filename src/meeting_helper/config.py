@@ -36,6 +36,7 @@ class AppConfig:
 
     openai_api_key: str = ""
     openai_base_url: str = ""
+    huggingface_token: str = ""
     whisper_model: str = DEFAULT_WHISPER_MODEL
     gpt_model: str = "gpt-4o-mini"
     language: str = "zh"
@@ -64,6 +65,7 @@ def _load_env() -> dict:
     mapping = {
         "OPENAI_API_KEY": "openai_api_key",
         "OPENAI_BASE_URL": "openai_base_url",
+        "HUGGINGFACE_TOKEN": "huggingface_token",
         "WHISPER_MODEL": "whisper_model",
         "GPT_MODEL": "gpt_model",
         "MEETING_LANGUAGE": "language",

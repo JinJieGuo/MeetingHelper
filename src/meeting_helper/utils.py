@@ -44,9 +44,16 @@ def save_transcription(transcription: Transcription, output_dir: Path) -> tuple[
         "language": transcription.language,
         "model": transcription.model,
         "duration_seconds": transcription.duration_seconds,
+        "diarized": transcription.diarized,
+        "speaker_count": transcription.speaker_count,
         "created_at": transcription.created_at.isoformat(),
         "segments": [
-            {"start": s.start, "end": s.end, "text": s.text}
+            {
+                "start": s.start,
+                "end": s.end,
+                "speaker": s.speaker,
+                "text": s.text,
+            }
             for s in transcription.segments
         ],
     }
@@ -55,7 +62,7 @@ def save_transcription(transcription: Transcription, output_dir: Path) -> tuple[
     # TXT（带时间戳的纯文本）
     txt_path = output_dir / f"{stem}.txt"
     lines = [
-        f"{format_timestamp(s.start)} {s.text}" for s in transcription.segments
+        _format_segment_line(s.start, s.text, s.speaker) for s in transcription.segments
     ]
     txt_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -68,7 +75,8 @@ def load_transcription_text(file_path: Path) -> str:
         data = json.loads(file_path.read_text(encoding="utf-8"))
         segments = data.get("segments", [])
         return "\n".join(
-            f"{format_timestamp(s['start'])} {s['text']}" for s in segments
+            _format_segment_line(s["start"], s["text"], s.get("speaker"))
+            for s in segments
         )
     # TXT 直接读取
     return file_path.read_text(encoding="utf-8")
@@ -80,3 +88,9 @@ def save_summary(content: str, output_dir: Path, stem: str) -> Path:
     md_path = output_dir / f"{stem}_summary.md"
     md_path.write_text(content, encoding="utf-8")
     return md_path
+
+
+def _format_segment_line(start: float, text: str, speaker: str | None) -> str:
+    """格式化单行转写文本。"""
+    speaker_part = f" [{speaker}]" if speaker else ""
+    return f"{format_timestamp(start)}{speaker_part} {text}"
