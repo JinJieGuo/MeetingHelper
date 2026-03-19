@@ -22,7 +22,7 @@ MeetingHelper 是一个命令行会议助手，支持：
 
 - Python 版本不低于 `3.10`
 - 本机有可用麦克风
-- 网络可访问所配置的 OpenAI 接口
+- 网络可访问当前配置的纪要 provider 接口
 - 首次转写 Whisper 模型时，环境允许下载模型文件
 
 ## 3. 安装
@@ -55,21 +55,27 @@ cp .env.example .env
 常用配置如下：
 
 ```env
-OPENAI_API_KEY=sk-your-api-key-here
+# SUMMARY_PROVIDER=openai
+# OPENAI_API_KEY=sk-your-openai-api-key-here
 # OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_MODEL=gpt-4o-mini
+# QWEN_API_KEY=sk-your-qwen-api-key-here
+# QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# QWEN_MODEL=qwen-plus
 # HUGGINGFACE_TOKEN=hf_your_token_here
 # WHISPER_MODEL=medium
-# GPT_MODEL=gpt-4o-mini
 # MEETING_LANGUAGE=zh
 ```
 
 说明：
 
-- `OPENAI_API_KEY`：生成会议纪要必填
-- `OPENAI_BASE_URL`：使用自定义兼容接口时可配置
+- `SUMMARY_PROVIDER`：纪要 provider，默认 `openai`
+- `OPENAI_API_KEY` / `QWEN_API_KEY`：分别对应 OpenAI / Qwen 的 API Key
+- `OPENAI_BASE_URL`：OpenAI 兼容接口地址
+- `QWEN_BASE_URL`：Qwen OpenAI 兼容接口地址，默认值为 `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - `HUGGINGFACE_TOKEN`：启用发言人区分时必填
 - `WHISPER_MODEL`：默认 Whisper 模型
-- `GPT_MODEL`：默认总结模型
+- `OPENAI_MODEL` / `QWEN_MODEL`：各 provider 默认纪要模型
 - `MEETING_LANGUAGE`：纪要输出语言，默认 `zh`
 
 ### 4.2 方式二：使用命令写入用户配置
@@ -83,9 +89,16 @@ meeting config --show
 设置单个配置项：
 
 ```bash
-meeting config --set gpt_model=gpt-4o-mini
+meeting config --set summary_provider=openai
+meeting config --set openai_model=gpt-4o-mini
+meeting config --set qwen_model=qwen-plus
 meeting config --set language=zh
 ```
+
+说明：
+
+- `meeting config --set gpt_model=...` 仍兼容，内部会映射到 `openai_model`
+- 如果使用 Qwen，也可直接设置 `qwen_api_key`、`qwen_base_url`、`qwen_model`
 
 用户配置文件保存位置：
 
@@ -223,11 +236,21 @@ meeting summarize data/transcriptions/meeting_20260318_140000.txt
 meeting summarize data/transcriptions/meeting_20260318_140000.json
 ```
 
-指定 GPT 模型和输出语言：
+指定 OpenAI provider、模型和输出语言：
 
 ```bash
 meeting summarize data/transcriptions/meeting_20260318_140000.txt \
-  --gpt-model gpt-4o-mini \
+  --summary-provider openai \
+  --summary-model gpt-4o-mini \
+  --language zh
+```
+
+切换到 Qwen：
+
+```bash
+meeting summarize data/transcriptions/meeting_20260318_140000.txt \
+  --summary-provider qwen \
+  --summary-model qwen-plus \
   --language zh
 ```
 
@@ -257,13 +280,25 @@ meeting process --device 1 --duration 20
 meeting process --audio-file data/recordings/meeting_20260318_140000.wav
 ```
 
-同时指定 Whisper 和 GPT 模型：
+同时指定 Whisper 和 OpenAI 纪要模型：
 
 ```bash
 meeting process \
   --audio-file data/recordings/meeting_20260318_140000.wav \
   --model medium \
-  --gpt-model gpt-4o-mini \
+  --summary-provider openai \
+  --summary-model gpt-4o-mini \
+  --language zh
+```
+
+使用 Qwen 生成纪要：
+
+```bash
+meeting process \
+  --audio-file data/recordings/meeting_20260318_140000.wav \
+  --model medium \
+  --summary-provider qwen \
+  --summary-model qwen-plus \
   --language zh
 ```
 
@@ -279,15 +314,16 @@ meeting process \
 
 注意：
 
-- `meeting process` 会在开始时检查 `OPENAI_API_KEY`
-- 即使使用已有音频文件，只要要生成纪要，也必须先配置 OpenAI Key
+- `meeting process` 会在开始时检查当前纪要 provider 所需的 API Key
+- 使用 `openai` 时需要 `OPENAI_API_KEY`
+- 使用 `qwen` 时需要 `QWEN_API_KEY` 或 `DASHSCOPE_API_KEY`
 - 启用 `--diarize` 时，还必须配置 `HUGGINGFACE_TOKEN`
 
 ## 7. 推荐使用流程
 
 ### 7.1 最常见流程
 
-1. 配置 `.env` 中的 `OPENAI_API_KEY`
+1. 配置 `.env` 中的纪要 provider 和对应 API Key
 2. 使用 `meeting devices` 确认麦克风索引
 3. 执行 `meeting process --duration 30`
 4. 在 `data/summaries/` 查看生成的 Markdown 纪要
@@ -367,11 +403,12 @@ meeting process \
 meeting devices
 ```
 
-### 9.2 提示“未配置 OPENAI_API_KEY”
+### 9.2 提示“未配置 OPENAI_API_KEY”或“未配置 QWEN_API_KEY / DASHSCOPE_API_KEY”
 
-说明还没有为总结功能配置 OpenAI Key。请确认：
+说明当前纪要 provider 对应的 Key 还没有配置。请确认：
 
-- `.env` 中是否设置了 `OPENAI_API_KEY`
+- 当前 `SUMMARY_PROVIDER` 是 `openai` 还是 `qwen`
+- `.env` 中是否设置了对应的 `OPENAI_API_KEY` 或 `QWEN_API_KEY`
 - 环境变量是否生效
 - 或者是否写入了 `~/.config/meeting-helper/config.json`
 
@@ -404,9 +441,9 @@ meeting transcribe your_audio.wav --model base
 
 通常优先检查：
 
-- OpenAI Key 是否正确
+- 当前 provider 的 Key 是否正确
 - 网络是否能访问配置的接口地址
-- `OPENAI_BASE_URL` 是否填写正确
+- `OPENAI_BASE_URL` 或 `QWEN_BASE_URL` 是否填写正确
 - 转写文本是否为空
 
 ### 9.6 长会议能不能直接总结
@@ -477,10 +514,13 @@ meeting transcribe data/recordings/meeting_xxx.wav --model medium --language zh
 meeting transcribe data/recordings/meeting_xxx.wav --model medium --language zh --diarize
 
 # 生成纪要
-meeting summarize data/transcriptions/meeting_xxx.txt --gpt-model gpt-4o-mini --language zh
+meeting summarize data/transcriptions/meeting_xxx.txt --summary-provider openai --summary-model gpt-4o-mini --language zh
+
+# 使用 Qwen 生成纪要
+meeting summarize data/transcriptions/meeting_xxx.txt --summary-provider qwen --summary-model qwen-plus --language zh
 
 # 一站式处理
-meeting process --duration 15 --device 1 --model medium --gpt-model gpt-4o-mini --language zh
+meeting process --duration 15 --device 1 --model medium --summary-provider openai --summary-model gpt-4o-mini --language zh
 
 # 查看配置
 meeting config --show

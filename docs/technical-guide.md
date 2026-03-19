@@ -10,7 +10,7 @@ MeetingHelper 是一个本地命令行工具，用于完成会议音频的录制
 - 录制麦克风音频并保存为 WAV 文件
 - 使用 `faster-whisper` 对音频进行离线转写
 - 可选使用 `pyannote.audio` 做发言人区分
-- 使用 OpenAI 模型根据转写文本生成结构化会议纪要
+- 使用可插拔的摘要 provider 根据转写文本生成结构化会议纪要
 - 通过单条命令串联“录音 -> 转写 -> 总结”流程
 
 ## 2. 目录结构
@@ -37,7 +37,8 @@ MeetingHelper/
         ├── diarizer.py          # 发言人区分
         ├── models.py            # 数据模型
         ├── recorder.py          # 麦克风录音
-        ├── summarizer.py        # GPT 纪要生成
+        ├── summarizer.py        # 纪要生成入口
+        ├── summary_providers/   # OpenAI / Qwen 摘要 provider
         ├── transcriber.py       # Whisper 转写
         └── utils.py             # 文件与格式化工具
 ```
@@ -77,7 +78,9 @@ MeetingHelper/
 - `diarizer.py`
   - 负责说话人区分与 speaker 标签回填。
 - `summarizer.py`
-  - 负责构造系统提示词并调用 OpenAI 接口生成纪要。
+  - 负责接收请求并分发到具体摘要 provider。
+- `summary_providers/*`
+  - 负责 OpenAI / Qwen 等具体模型源的适配。
 - `utils.py`
   - 负责文件名生成、时间格式化、转写结果保存和纪要保存。
 - `models.py`
@@ -142,11 +145,18 @@ MeetingHelper/
 
 `meeting summarize` 和 `meeting process` 中的总结逻辑一致：
 
-1. CLI 加载配置并确认存在 `OPENAI_API_KEY`。
+1. CLI 加载配置并解析当前启用的摘要 provider。
 2. `utils.load_transcription_text()` 读取 TXT 或 JSON 转写内容。
-3. `summarizer.generate_summary()` 根据语言选择中文或英文系统提示词。
-4. 通过 `OpenAI().chat.completions.create()` 生成 Markdown 格式纪要。
+3. `summarizer.generate_summary()` 通过工厂创建 provider。
+4. provider 根据语言选择提示词，并通过 OpenAI 兼容 Chat Completions 接口生成 Markdown 格式纪要。
 5. `utils.save_summary()` 将结果写入 `data/summaries/<stem>_summary.md`。
+
+当前已实现的摘要 provider：
+
+- `openai`
+- `qwen`
+
+其中 `qwen` 根据文档使用 OpenAI 兼容接口，默认 `base_url` 为 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
 
 系统提示词当前固定为两套模板：
 
@@ -190,11 +200,15 @@ MeetingHelper/
 
 `AppConfig` 当前字段如下：
 
+- `summary_provider`
 - `openai_api_key`
 - `openai_base_url`
+- `openai_model`
+- `qwen_api_key`
+- `qwen_base_url`
+- `qwen_model`
 - `whisper_model`
 - `huggingface_token`
-- `gpt_model`
 - `language`
 - `sample_rate`
 - `channels`
@@ -204,11 +218,17 @@ MeetingHelper/
 
 ### 7.3 环境变量映射
 
+- `SUMMARY_PROVIDER` -> `summary_provider`
 - `OPENAI_API_KEY` -> `openai_api_key`
 - `OPENAI_BASE_URL` -> `openai_base_url`
+- `OPENAI_MODEL` -> `openai_model`
+- `QWEN_API_KEY` -> `qwen_api_key`
+- `QWEN_BASE_URL` -> `qwen_base_url`
+- `QWEN_MODEL` -> `qwen_model`
 - `HUGGINGFACE_TOKEN` -> `huggingface_token`
 - `WHISPER_MODEL` -> `whisper_model`
-- `GPT_MODEL` -> `gpt_model`
+- `GPT_MODEL` -> `openai_model`（兼容旧配置）
+- `DASHSCOPE_API_KEY` -> `qwen_api_key`（兼容阿里云默认环境变量）
 - `MEETING_LANGUAGE` -> `language`
 
 ### 7.4 目录初始化
@@ -271,12 +291,12 @@ MeetingHelper/
 
 - 参数非法时直接 `typer.Exit(1)`
 - 录音失败时打印错误并退出
-- 缺少 `OPENAI_API_KEY` 时退出
+- 缺少当前摘要 provider 的 API Key 时退出
 - 输入文件为空时退出
 
 尚未覆盖的方面：
 
-- OpenAI API 异常的细分处理
+- OpenAI / Qwen API 异常的细分处理
 - Whisper 模型下载或加载失败的恢复逻辑
 - pyannote 模型权限、token 或 `ffmpeg` 缺失时的自动诊断
 - 不同平台音频设备兼容性诊断
@@ -290,7 +310,7 @@ MeetingHelper/
 - 发言人区分依赖 `pyannote.audio`、`ffmpeg` 和 Hugging Face token
 - speaker 归属目前基于 segment 级重叠匹配，仍有边界误差
 - 长文本总结没有分段、截断或重试机制，超长会议可能直接受模型上下文限制
-- `process` 命令即使只想跑前两步，也要求先配置 `OPENAI_API_KEY`
+- `process` 命令目前仍默认包含纪要生成步骤，因此会要求当前摘要 provider 的 Key
 - `config --set` 以字符串方式写入，数值型配置缺少类型校验
 - 录音文件格式固定为 WAV，未提供压缩格式输出
 - `Recording`、`Summary` 模型尚未用于统一持久化

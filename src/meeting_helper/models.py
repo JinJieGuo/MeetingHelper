@@ -56,6 +56,7 @@ class Summary:
 
     transcription_file: Path
     content: str
-    gpt_model: str
+    provider: str
+    model: str
     language: str
     created_at: datetime = field(default_factory=datetime.now)

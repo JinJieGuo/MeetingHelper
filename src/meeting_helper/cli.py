@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import signal
-import sys
 import threading
 from pathlib import Path
 from typing import Optional
@@ -12,12 +11,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich import print as rprint
 
 from .config import (
     WHISPER_MODELS,
     DEFAULT_WHISPER_MODEL,
+    SUMMARY_PROVIDERS,
     load_config,
+    resolve_summary_settings,
     save_config,
 )
 from .utils import (
@@ -179,18 +179,28 @@ def transcribe(
 @app.command()
 def summarize(
     file: Path = typer.Argument(..., help="转写文件路径（JSON 或 TXT）", exists=True),
-    gpt_model: Optional[str] = typer.Option(None, "--gpt-model", help="GPT 模型名"),
+    summary_provider: Optional[str] = typer.Option(None, "--summary-provider", help=f"纪要 provider ({', '.join(SUMMARY_PROVIDERS)})"),
+    summary_model: Optional[str] = typer.Option(None, "--summary-model", "--gpt-model", help="纪要模型名"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="纪要语言（zh/en）"),
 ):
     """根据转写文本生成会议纪要"""
     cfg = load_config(
-        gpt_model=gpt_model,
+        summary_provider=summary_provider,
         language=language,
     )
+    try:
+        provider_name, model_name, api_key, base_url = resolve_summary_settings(
+            cfg,
+            provider_override=summary_provider,
+            model_override=summary_model,
+        )
+    except ValueError as exc:
+        console.print(f"[red]错误: {exc}[/red]")
+        raise typer.Exit(1)
 
-    if not cfg.openai_api_key:
-        console.print("[red]错误: 未配置 OPENAI_API_KEY[/red]")
-        console.print("  请在 .env 文件或环境变量中设置 OPENAI_API_KEY")
+    if not api_key:
+        missing_key = "OPENAI_API_KEY" if provider_name == "openai" else "QWEN_API_KEY / DASHSCOPE_API_KEY"
+        console.print(f"[red]错误: 未配置 {missing_key}[/red]")
         raise typer.Exit(1)
 
     transcript_text = load_transcription_text(file)
@@ -198,17 +208,18 @@ def summarize(
         console.print("[red]错误: 转写文件为空[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[green]生成纪要[/green] — 模型: {cfg.gpt_model}")
+    console.print(f"[green]生成纪要[/green] — Provider: {provider_name}, 模型: {model_name}")
 
-    with console.status("[bold green]GPT 生成中..."):
+    with console.status("[bold green]纪要生成中..."):
         from .summarizer import generate_summary
 
         content = generate_summary(
             transcript_text=transcript_text,
-            api_key=cfg.openai_api_key,
-            gpt_model=cfg.gpt_model,
+            provider=provider_name,
+            api_key=api_key,
+            model=model_name,
             language=cfg.language,
-            base_url=cfg.openai_base_url or None,
+            base_url=base_url,
         )
 
     output_dir = Path(cfg.summaries_dir)
@@ -230,19 +241,30 @@ def process(
     device: Optional[int] = typer.Option(None, "--device", help="音频设备索引"),
     model: str = typer.Option(DEFAULT_WHISPER_MODEL, "--model", "-m", help="Whisper 模型"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="语言代码"),
-    gpt_model: Optional[str] = typer.Option(None, "--gpt-model", help="GPT 模型名"),
+    summary_provider: Optional[str] = typer.Option(None, "--summary-provider", help=f"纪要 provider ({', '.join(SUMMARY_PROVIDERS)})"),
+    summary_model: Optional[str] = typer.Option(None, "--summary-model", "--gpt-model", help="纪要模型名"),
     diarize: bool = typer.Option(False, "--diarize", help="启用发言人区分（需要 Hugging Face token）"),
     min_speakers: Optional[int] = typer.Option(None, "--min-speakers", help="最少说话人数"),
     max_speakers: Optional[int] = typer.Option(None, "--max-speakers", help="最多说话人数"),
 ):
     """一站式处理：录音 → 转写 → 生成纪要"""
-    cfg = load_config(gpt_model=gpt_model, language=language)
+    cfg = load_config(summary_provider=summary_provider, language=language)
     if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
         console.print("[red]错误: --min-speakers 不能大于 --max-speakers[/red]")
         raise typer.Exit(1)
+    try:
+        provider_name, model_name, api_key, base_url = resolve_summary_settings(
+            cfg,
+            provider_override=summary_provider,
+            model_override=summary_model,
+        )
+    except ValueError as exc:
+        console.print(f"[red]错误: {exc}[/red]")
+        raise typer.Exit(1)
 
-    if not cfg.openai_api_key:
-        console.print("[red]错误: 未配置 OPENAI_API_KEY（纪要生成需要）[/red]")
+    if not api_key:
+        missing_key = "OPENAI_API_KEY" if provider_name == "openai" else "QWEN_API_KEY / DASHSCOPE_API_KEY"
+        console.print(f"[red]错误: 未配置 {missing_key}（纪要生成需要）[/red]")
         raise typer.Exit(1)
     if diarize and not cfg.huggingface_token:
         console.print("[red]错误: 未配置 HUGGINGFACE_TOKEN，无法启用发言人区分[/red]")
@@ -316,18 +338,19 @@ def process(
     console.print(f"  TXT:  {txt_path}")
 
     # ── Step 3: 纪要 ──
-    console.print(f"\n[green]Step 3/3: 生成纪要[/green] — 模型: {cfg.gpt_model}")
+    console.print(f"\n[green]Step 3/3: 生成纪要[/green] — Provider: {provider_name}, 模型: {model_name}")
     transcript_text = load_transcription_text(json_path)
 
-    with console.status("[bold green]GPT 生成中..."):
+    with console.status("[bold green]纪要生成中..."):
         from .summarizer import generate_summary
 
         summary_content = generate_summary(
             transcript_text=transcript_text,
-            api_key=cfg.openai_api_key,
-            gpt_model=cfg.gpt_model,
+            provider=provider_name,
+            api_key=api_key,
+            model=model_name,
             language=cfg.language,
-            base_url=cfg.openai_base_url or None,
+            base_url=base_url,
         )
 
     md_path = save_summary(summary_content, Path(cfg.summaries_dir), wav_path.stem)
@@ -355,6 +378,8 @@ def config_cmd(
             raise typer.Exit(1)
         key, value = set_value.split("=", 1)
         key = key.strip()
+        if key == "gpt_model":
+            key = "openai_model"
         if key not in cfg.__dataclass_fields__:
             console.print(f"[red]未知配置项: {key}[/red]")
             console.print(f"  可用: {', '.join(cfg.__dataclass_fields__.keys())}")
@@ -370,7 +395,7 @@ def config_cmd(
     table.add_column("值", style="green")
     for key, value in asdict(cfg).items():
         display_val = str(value)
-        if key in {"openai_api_key", "huggingface_token"} and value:
+        if key in {"openai_api_key", "qwen_api_key", "huggingface_token"} and value:
             display_val = value[:8] + "..." + value[-4:] if len(value) > 12 else "***"
         table.add_row(key, display_val)
     console.print(table)

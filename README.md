@@ -14,7 +14,7 @@
 - `meeting devices`：查看可用音频输入设备
 - `meeting record`：录制麦克风音频并保存为 WAV
 - `meeting transcribe`：使用 `faster-whisper` 转写音频，可选发言人区分
-- `meeting summarize`：使用 OpenAI 模型生成 Markdown 纪要
+- `meeting summarize`：使用可切换的摘要 provider 生成 Markdown 纪要
 - `meeting process`：执行“录音 -> 转写 -> 纪要”一站式流程
 - `meeting config`：查看或写入本地配置
 
@@ -56,21 +56,27 @@ cp .env.example .env
 示例配置：
 
 ```env
-OPENAI_API_KEY=sk-your-api-key-here
+# SUMMARY_PROVIDER=openai
+# OPENAI_API_KEY=sk-your-openai-api-key-here
 # OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_MODEL=gpt-4o-mini
+# QWEN_API_KEY=sk-your-qwen-api-key-here
+# QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# QWEN_MODEL=qwen-plus
 # HUGGINGFACE_TOKEN=hf_your_token_here
 # WHISPER_MODEL=medium
-# GPT_MODEL=gpt-4o-mini
 # MEETING_LANGUAGE=zh
 ```
 
 说明：
 
-- `OPENAI_API_KEY`：生成会议纪要时必需
-- `OPENAI_BASE_URL`：接入兼容 OpenAI 协议的服务时可配置
+- `SUMMARY_PROVIDER`：当前纪要生成 provider，默认 `openai`
+- `OPENAI_API_KEY` / `QWEN_API_KEY`：分别对应各自 provider 的 API Key
+- `OPENAI_BASE_URL`：接入自定义 OpenAI 兼容接口时可配置
+- `QWEN_BASE_URL`：Qwen OpenAI 兼容地址，默认使用阿里云百炼北京地域地址
 - `HUGGINGFACE_TOKEN`：启用发言人区分时必需
 - `WHISPER_MODEL`：默认转写模型
-- `GPT_MODEL`：默认纪要模型
+- `OPENAI_MODEL` / `QWEN_MODEL`：各 provider 的默认纪要模型
 - `MEETING_LANGUAGE`：纪要输出语言，默认 `zh`
 
 ## 快速开始
@@ -112,7 +118,13 @@ meeting transcribe data/recordings/meeting_xxx.wav --model medium --language zh 
 最后生成纪要：
 
 ```bash
-meeting summarize data/transcriptions/meeting_xxx.txt --gpt-model gpt-4o-mini --language zh
+meeting summarize data/transcriptions/meeting_xxx.txt --summary-provider openai --summary-model gpt-4o-mini --language zh
+```
+
+切换到 Qwen：
+
+```bash
+meeting summarize data/transcriptions/meeting_xxx.txt --summary-provider qwen --summary-model qwen-plus --language zh
 ```
 
 ## 输出目录
@@ -150,7 +162,7 @@ Whisper 发言人区分能力已经落地，当前支持：
 ## 当前限制
 
 - 当前转写能力默认绑定 `faster-whisper`
-- 当前纪要生成默认绑定 OpenAI 兼容接口
+- 当前纪要生成已支持 OpenAI / Qwen 两种 provider
 - 长文本总结尚未做分段摘要和结果合并
 - 转写默认使用 CPU，未暴露更多推理后端配置
 - 发言人区分依赖 `pyannote.audio`、`ffmpeg` 和 Hugging Face token
@@ -158,7 +170,8 @@ Whisper 发言人区分能力已经落地，当前支持：
 ## 待办事项
 
 1. 语音转文字改成插拔式架构，支持多种模型源和接入方式，包括本地模型、远端模型、国际主流模型，以及中国主流模型服务。
-2. 会议纪要生成也改成多模型源架构，支持不同大模型厂商和兼容接口的统一接入与切换。
+2. 长文本纪要生成补充分段摘要、结果合并和重试策略。
+3. 优化生成纪要的提示词，提升结构稳定性、行动项提取准确率和中文表达质量。
 
 ## 项目结构
 
@@ -173,16 +186,9 @@ MeetingHelper/
     ├── config.py
     ├── diarizer.py
     ├── recorder.py
+    ├── summary_providers/
     ├── transcriber.py
     ├── summarizer.py
     ├── models.py
     └── utils.py
 ```
-
-## 后续建议
-
-如果下一步准备做你列出的两个待办，我建议先做接口抽象，再接模型实现：
-
-1. 为转写和纪要分别定义 provider 接口。
-2. 在配置层增加 `provider`、`model`、`base_url`、`api_key` 等统一字段。
-3. 先落地本地实现和一个远端实现，再逐步扩充不同厂商适配器。
